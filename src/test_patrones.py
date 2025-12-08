@@ -1,301 +1,343 @@
 """
-RPSAI - Test automatico de patrones
-===================================
+Test de Patrones para RPSAI
+============================
 
-Este script evalua el comportamiento de la IA contra varios patrones
-clasicos de oponente (constante, ciclo, copy-bot, counter-bot, etc.)
-sin intervencion humana.
-
-Uso:
-    py .\src\test_patrones.py
+Este script evalua el rendimiento del modelo contra diferentes
+patrones de juego adversarios que podrian usarse para intentar
+ganar al modelo o explotarlo.
 """
 
 import sys
-from pathlib import Path
 import numpy as np
+from pathlib import Path
 
-# Agregar el directorio src al path para importar modelo.py
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent))
 
-from modelo import JugadorIA, GANA_A
-
-JUGADAS = ["piedra", "papel", "tijera"]
+from modelo import JugadorIA, JUGADA_A_NUM, NUM_A_JUGADA, GANA_A, PIERDE_CONTRA
 
 
-def resultado_ia(jugada_ia: str, jugada_op: str) -> str:
+# CONFIGURACION DEL TEST
+RONDAS_POR_PARTIDA = 100
+REPETICIONES_POR_PATRON = 50
+
+
+class Oponente:
+    """Clase base para diferentes estrategias de oponente"""
+
+    def __init__(self):
+        self.historial = []
+
+    def registrar_ronda(self, jugada_ia, jugada_propia):
+        self.historial.append((jugada_ia, jugada_propia))
+
+    def decidir_jugada(self) -> str:
+        raise NotImplementedError
+
+
+class OponenteAleatorio(Oponente):
+    """Juega completamente aleatorio"""
+
+    def decidir_jugada(self) -> str:
+        return np.random.choice(["piedra", "papel", "tijera"])
+
+
+class OponentePiedraConstante(Oponente):
+    """Siempre juega piedra"""
+
+    def decidir_jugada(self) -> str:
+        return "piedra"
+
+
+class OponentePapelConstante(Oponente):
+    """Siempre juega papel"""
+
+    def decidir_jugada(self) -> str:
+        return "papel"
+
+
+class OponenteTijeraConstante(Oponente):
+    """Siempre juega tijera"""
+
+    def decidir_jugada(self) -> str:
+        return "tijera"
+
+
+class OponenteCiclo(Oponente):
+    """Juega en ciclo: piedra -> papel -> tijera -> piedra..."""
+
+    def decidir_jugada(self) -> str:
+        ciclo = ["piedra", "papel", "tijera"]
+        return ciclo[len(self.historial) % 3]
+
+
+class OponenteCounterBot(Oponente):
+    """Juega lo que le ganaria a la ultima jugada de la IA"""
+
+    def decidir_jugada(self) -> str:
+        if not self.historial:
+            return np.random.choice(["piedra", "papel", "tijera"])
+
+        ultima_ia = self.historial[-1][0]
+        return PIERDE_CONTRA[ultima_ia]
+
+
+class OponenteCopyBot(Oponente):
+    """Copia la ultima jugada de la IA"""
+
+    def decidir_jugada(self) -> str:
+        if not self.historial:
+            return np.random.choice(["piedra", "papel", "tijera"])
+
+        return self.historial[-1][0]
+
+
+class OponenteAntiCounterBot(Oponente):
+    """Juega lo que gana a lo que le ganaria a su ultima jugada"""
+
+    def decidir_jugada(self) -> str:
+        if not self.historial:
+            return np.random.choice(["piedra", "papel", "tijera"])
+
+        ultima_propia = self.historial[-1][1]
+        counter = PIERDE_CONTRA[ultima_propia]
+        return PIERDE_CONTRA[counter]
+
+
+class OponenteSesgoFuerte(Oponente):
+    """Juega una opcion el 70% del tiempo"""
+
+    def __init__(self, opcion_favorita="piedra"):
+        super().__init__()
+        self.opcion_favorita = opcion_favorita
+
+    def decidir_jugada(self) -> str:
+        if np.random.random() < 0.7:
+            return self.opcion_favorita
+        return np.random.choice(["piedra", "papel", "tijera"])
+
+
+class OponenteSesgo80Piedra(Oponente):
+    """80% piedra, 20% aleatorio"""
+
+    def decidir_jugada(self) -> str:
+        if np.random.random() < 0.8:
+            return "piedra"
+        return np.random.choice(["piedra", "papel", "tijera"])
+
+
+class OponenteSesgo80Papel(Oponente):
+    """80% papel, 20% aleatorio"""
+
+    def decidir_jugada(self) -> str:
+        if np.random.random() < 0.8:
+            return "papel"
+        return np.random.choice(["piedra", "papel", "tijera"])
+
+
+class OponenteSesgo80Tijera(Oponente):
+    """80% tijera, 20% aleatorio"""
+
+    def decidir_jugada(self) -> str:
+        if np.random.random() < 0.8:
+            return "tijera"
+        return np.random.choice(["piedra", "papel", "tijera"])
+
+
+class OponenteVictor(Oponente):
     """
-    Devuelve el resultado desde el punto de vista de la IA.
-    """
-    if jugada_ia == jugada_op:
-        return "empate"
-    elif GANA_A[jugada_ia] == jugada_op:
-        return "victoria"
-    else:
-        return "derrota"
-
-
-class EvaluadorPatrones:
-    """
-    Clase para evaluar automaticamente la IA contra distintos patrones.
+    Patron especifico de Victor:
+    - 47% piedra (casi la mitad)
+    - Despues de tijera → casi siempre piedra (90%)
+    - Papel solo 22% (evita papel)
+    - Despues de empates → piedra 56%
+    - Rachas de piedra: si saco piedra 2 veces, 70% tercera piedra
     """
 
-    def __init__(self, num_rondas: int = 50, num_evals: int = 30):
-        """
-        Args:
-            num_rondas: rondas por partida (ej: 50, como en la evaluacion real)
-            num_evals: cuantas veces repetir cada test para promediar
-        """
-        self.num_rondas = num_rondas
-        self.num_evals = num_evals
+    def decidir_jugada(self) -> str:
+        # Si hay historial, aplicar reglas de Victor
+        if len(self.historial) >= 1:
+            ultima_propia = self.historial[-1][1]
 
-    # ----------------- PATRONES DE OPONENTE -----------------
+            # Regla 1: Despues de tijera → 90% piedra
+            if ultima_propia == "tijera":
+                if np.random.random() < 0.9:
+                    return "piedra"
 
-    def _estrategia_constante(self, jugada_constante: str):
-        def fn(ronda, hist_ia, hist_op):
-            return jugada_constante
-        return fn
+            # Regla 2: Despues de empate → 56% piedra
+            ultima_ia = self.historial[-1][0]
+            if ultima_ia == ultima_propia:
+                if np.random.random() < 0.56:
+                    return "piedra"
 
-    def _estrategia_alternancia(self, j1: str, j2: str):
-        secuencia = [j1, j2]
+            # Regla 3: Rachas de piedra (si las ultimas 2 son piedra → 70% piedra)
+            if len(self.historial) >= 2:
+                ultimas_2 = [j2 for _, j2 in self.historial[-2:]]
+                if ultimas_2[0] == "piedra" and ultimas_2[1] == "piedra":
+                    if np.random.random() < 0.7:
+                        return "piedra"
 
-        def fn(ronda, hist_ia, hist_op):
-            idx = (ronda - 1) % 2
-            return secuencia[idx]
-        return fn
-
-    def _estrategia_ciclo3(self, s0: str, s1: str, s2: str):
-        secuencia = [s0, s1, s2]
-
-        def fn(ronda, hist_ia, hist_op):
-            idx = (ronda - 1) % 3
-            return secuencia[idx]
-        return fn
-
-    def _estrategia_ciclo_largo(self, secuencia):
-        L = len(secuencia)
-
-        def fn(ronda, hist_ia, hist_op):
-            idx = (ronda - 1) % L
-            return secuencia[idx]
-        return fn
-
-    def _estrategia_copy_bot(self, ronda, hist_ia, hist_op):
-        """
-        Copia SIEMPRE la jugada anterior de la IA.
-        """
-        if not hist_ia:
-            return "piedra"  # primera jugada arbitraria
-        return hist_ia[-1]
-
-    def _estrategia_counter_bot(self, ronda, hist_ia, hist_op):
-        """
-        Juega SIEMPRE lo que gana a la jugada anterior de la IA.
-        """
-        from modelo import PIERDE_CONTRA  # evitar import circular arriba
-
-        if not hist_ia:
-            base = "piedra"
+        # Distribucion general: 47% piedra, 31% tijera, 22% papel
+        rand = np.random.random()
+        if rand < 0.47:
+            return "piedra"
+        elif rand < 0.47 + 0.31:
+            return "tijera"
         else:
-            base = hist_ia[-1]
-        return PIERDE_CONTRA[base]
+            return "papel"
 
-    def _estrategia_cambio_mitad(self):
-        """
-        Mitad 1: oponente random puro.
-        Mitad 2: ciclo largo fijo.
-        """
-        mitad = self.num_rondas // 2
-        ciclo = ["piedra", "papel", "papel", "tijera", "papel"]
-        L = len(ciclo)
 
-        def fn(ronda, hist_ia, hist_op):
-            if ronda <= mitad:
-                return np.random.choice(JUGADAS)
-            else:
-                idx = (ronda - mitad - 1) % L
-                return ciclo[idx]
+class OponenteCambiaDepuesPerder(Oponente):
+    """Siempre cambia de jugada despues de perder"""
 
-        return fn
+    def decidir_jugada(self) -> str:
+        if not self.historial:
+            return np.random.choice(["piedra", "papel", "tijera"])
 
-    # ----------------- MOTOR DE SIMULACION -----------------
+        ultima_ia, ultima_propia = self.historial[-1]
 
-    def _simular_patron(self, nombre: str, estrategia_op):
-        """
-        Simula varias partidas contra una estrategia de oponente dada.
+        if GANA_A[ultima_ia] == ultima_propia:
+            # Perdio, cambiar a algo diferente
+            opciones = ["piedra", "papel", "tijera"]
+            opciones.remove(ultima_propia)
+            return np.random.choice(opciones)
 
-        Args:
-            nombre: nombre del patron (solo para imprimir)
-            estrategia_op: funcion (ronda, hist_ia, hist_op) -> jugada_oponente
+        # Gano o empato, puede repetir o cambiar
+        return np.random.choice(["piedra", "papel", "tijera"])
 
-        Returns:
-            lista de winrates (por partida) de la IA
-        """
-        print(f"\n=== Patron: {nombre} ===")
 
-        winrates = []
+def calcular_resultado_ronda(jugada_ia, jugada_oponente):
+    """Devuelve 1 si gana IA, 0 empate, -1 si pierde"""
+    if jugada_ia == jugada_oponente:
+        return 0
+    if GANA_A[jugada_ia] == jugada_oponente:
+        return 1
+    return -1
 
-        for eval_id in range(1, self.num_evals + 1):
-            ia = JugadorIA()  # carga el modelo entrenado
-            historial_ia = []
-            historial_op = []
 
-            victorias = 0
-            derrotas = 0
-            empates = 0
+def jugar_partida(ia: JugadorIA, oponente: Oponente, num_rondas=100, verbose=False):
+    """
+    Juega una partida completa entre la IA y el oponente.
 
-            for ronda in range(1, self.num_rondas + 1):
-                # IA decide su jugada
-                jugada_ia = ia.decidir_jugada()
+    Returns:
+        (victorias_ia, empates, derrotas_ia)
+    """
+    victorias = 0
+    empates = 0
+    derrotas = 0
 
-                # Oponente juega segun la estrategia
-                jugada_op = estrategia_op(ronda, historial_ia, historial_op)
+    for ronda in range(num_rondas):
+        jugada_ia = ia.decidir_jugada()
+        jugada_oponente = oponente.decidir_jugada()
 
-                # Resultado y actualizacion de historial
-                res = resultado_ia(jugada_ia, jugada_op)
+        resultado = calcular_resultado_ronda(jugada_ia, jugada_oponente)
 
-                if res == "victoria":
-                    victorias += 1
-                elif res == "derrota":
-                    derrotas += 1
-                else:
-                    empates += 1
+        if resultado == 1:
+            victorias += 1
+        elif resultado == 0:
+            empates += 1
+        else:
+            derrotas += 1
 
-                # IMPORTANTE: registrar con IA como j1 y oponente como j2
-                ia.registrar_ronda(jugada_ia, jugada_op)
+        ia.registrar_ronda(jugada_ia, jugada_oponente)
+        oponente.registrar_ronda(jugada_ia, jugada_oponente)
 
-                historial_ia.append(jugada_ia)
-                historial_op.append(jugada_op)
+        if verbose and ronda % 20 == 0:
+            print(f"  Ronda {ronda}: IA={jugada_ia}, Oponente={jugada_oponente}, Resultado={resultado}")
 
-            total_decisivas = victorias + derrotas
-            if total_decisivas > 0:
-                winrate = victorias / total_decisivas * 100
-            else:
-                winrate = 0.0
+    return victorias, empates, derrotas
 
-            winrates.append(winrate)
-            print(
-                f"  Eval {eval_id:02d}: "
-                f"{victorias}V-{derrotas}D-{empates}E | "
-                f"Winrate IA: {winrate:.1f}%"
-            )
 
-        winrates = np.array(winrates)
-        media = winrates.mean()
-        std = winrates.std()
-        w_min = winrates.min()
-        w_max = winrates.max()
+def evaluar_patron(nombre_patron, clase_oponente, num_partidas=20, rondas_por_partida=100):
+    """
+    Evalua el modelo contra un patron especifico multiples veces.
+    """
+    print(f"\n{'='*70}")
+    print(f"Evaluando contra: {nombre_patron}")
+    print(f"{'='*70}")
 
-        print(f"\n[Resumen patron: {nombre}]")
-        print(f"  Winrate medio IA: {media:.2f}%")
-        print(f"  Desviacion std  : {std:.2f}")
-        print(f"  Min / Max       : {w_min:.1f}% / {w_max:.1f}%")
+    winrates = []
 
-        return winrates
+    for i in range(num_partidas):
+        ia = JugadorIA()
 
-    # ----------------- EJECUTAR TODOS LOS TESTS -----------------
+        if callable(clase_oponente):
+            oponente = clase_oponente()
+        else:
+            oponente = clase_oponente
 
-    def ejecutar_todos(self):
-        """
-        Ejecuta los tests para todos los patrones definidos.
-        """
-        print("=" * 60)
-        print("   RPSAI - TEST AUTOMATICO DE PATRONES")
-        print("=" * 60)
-        print(f"Rondas por partida: {self.num_rondas}")
-        print(f"Repeticiones por patron: {self.num_evals}\n")
+        victorias, empates, derrotas = jugar_partida(ia, oponente, rondas_por_partida)
 
-        resultados = {}
+        total = victorias + empates + derrotas
+        winrate = (victorias / total) * 100 if total > 0 else 0
+        winrates.append(winrate)
 
-        # 1) Constantes
-        for jug in JUGADAS:
-            nombre = f"Constante ({jug})"
-            estrategia = self._estrategia_constante(jug)
-            resultados[nombre] = self._simular_patron(nombre, estrategia)
+        if (i + 1) % 5 == 0:
+            print(f"  Partidas completadas: {i + 1}/{num_partidas}")
 
-        # 2) Alternancia simple
-        resultados["Alternancia (piedra/papel)"] = self._simular_patron(
-            "Alternancia (piedra/papel)",
-            self._estrategia_alternancia("piedra", "papel"),
-        )
-        resultados["Alternancia (piedra/tijera)"] = self._simular_patron(
-            "Alternancia (piedra/tijera)",
-            self._estrategia_alternancia("piedra", "tijera"),
-        )
+    winrates = np.array(winrates)
 
-        # 3) Ciclo de 3
-        resultados["Ciclo3 (P/A/T)"] = self._simular_patron(
-            "Ciclo3 (piedra/papel/tijera)",
-            self._estrategia_ciclo3("piedra", "papel", "tijera"),
-        )
+    print(f"\nResultados para {nombre_patron}:")
+    print(f"  Winrate medio:    {winrates.mean():.2f}%")
+    print(f"  Desviacion std:   {winrates.std():.2f}%")
+    print(f"  Winrate minimo:   {winrates.min():.2f}%")
+    print(f"  Winrate maximo:   {winrates.max():.2f}%")
 
-        # 4) Copy-bot
-        resultados["Copy-bot"] = self._simular_patron(
-            "Copy-bot",
-            self._estrategia_copy_bot,
-        )
-
-        # 5) Counter-bot
-        resultados["Counter-bot"] = self._simular_patron(
-            "Counter-bot",
-            self._estrategia_counter_bot,
-        )
-
-        # 6) Ciclo largo tipo [1,2,2,3,2] -> [P, A, A, T, A]
-        ciclo_largo = ["piedra", "papel", "papel", "tijera", "papel"]
-        resultados["Ciclo largo (P,A,A,T,A)"] = self._simular_patron(
-            "Ciclo largo (P,A,A,T,A)",
-            self._estrategia_ciclo_largo(ciclo_largo),
-        )
-
-        # 7) Cambio de estrategia a mitad
-        resultados["Cambio mitad (random -> ciclo)"] = self._simular_patron(
-            "Cambio mitad (random -> ciclo largo)",
-            self._estrategia_cambio_mitad(),
-        )
-
-        print("\n" + "=" * 60)
-        print("   RESUMEN GLOBAL DE PATRONES")
-        print("=" * 60)
-
-        for nombre, winrates in resultados.items():
-            media = float(np.mean(winrates))
-            std = float(np.std(winrates))
-            w_min = float(np.min(winrates))
-            w_max = float(np.max(winrates))
-
-            # Una sola linea con toda la info
-            print(
-                f"  {nombre:35s} -> "
-                f"media: {media:6.2f}% | "
-                f"std: {std:5.2f} | "
-                f"min/max: {w_min:5.1f}% / {w_max:5.1f}%"
-            )
-
-        print("\n[FIN TEST PATRONES]")
+    return {
+        'media': winrates.mean(),
+        'std': winrates.std(),
+        'min': winrates.min(),
+        'max': winrates.max(),
+        'winrates': winrates
+    }
 
 
 def main():
-    from argparse import ArgumentParser
+    """Ejecuta todos los tests"""
+    print("="*70)
+    print("   TEST DE PATRONES ADVERSARIOS - RPSAI")
+    print("="*70)
+    print(f"\nConfiguracion:")
+    print(f"  Rondas por partida: {RONDAS_POR_PARTIDA}")
+    print(f"  Repeticiones por patron: {REPETICIONES_POR_PATRON}")
+    print(f"\nEvaluando {len([1 for _ in range(14)])} patrones diferentes...\n")
 
-    parser = ArgumentParser(description="Test automatico de patrones para la IA RPSAI")
-    parser.add_argument(
-        "-n",
-        "--rondas",
-        type=int,
-        default=50,
-        help="Rondas por partida (default: 50)",
-    )
-    parser.add_argument(
-        "-e",
-        "--evals",
-        type=int,
-        default=30,
-        help="Numero de partidas por patron (default: 30)",
-    )
-    args = parser.parse_args()
+    patrones = [
+        ("Aleatorio", OponenteAleatorio),
+        ("Piedra Constante", OponentePiedraConstante),
+        ("Papel Constante", OponentePapelConstante),
+        ("Tijera Constante", OponenteTijeraConstante),
+        ("Ciclo (P->Pa->T)", OponenteCiclo),
+        ("Counter-Bot", OponenteCounterBot),
+        ("Copy-Bot", OponenteCopyBot),
+        ("Anti-Counter-Bot", OponenteAntiCounterBot),
+        ("Sesgo Piedra 70%", lambda: OponenteSesgoFuerte("piedra")),
+        ("Sesgo 80% Piedra", OponenteSesgo80Piedra),
+        ("Sesgo 80% Papel", OponenteSesgo80Papel),
+        ("Sesgo 80% Tijera", OponenteSesgo80Tijera),
+        ("VICTOR (Patron Real)", OponenteVictor),
+        ("Cambia Tras Perder", OponenteCambiaDepuesPerder)
+    ]
 
-    evaluador = EvaluadorPatrones(num_rondas=args.rondas, num_evals=args.evals)
-    evaluador.ejecutar_todos()
+    resultados_globales = {}
+
+    for nombre, clase in patrones:
+        resultado = evaluar_patron(nombre, clase,
+                                  num_partidas=REPETICIONES_POR_PATRON,
+                                  rondas_por_partida=RONDAS_POR_PARTIDA)
+        resultados_globales[nombre] = resultado
+
+    print("\n" + "="*70)
+    print("RESUMEN GLOBAL")
+    print("="*70)
+    print(f"\n{'Patron':<25} {'Media':<10} {'Std':<10} {'Min':<10} {'Max':<10}")
+    print("-"*70)
+
+    for nombre, stats in resultados_globales.items():
+        print(f"{nombre:<25} {stats['media']:>6.2f}%   {stats['std']:>6.2f}%   "
+              f"{stats['min']:>6.2f}%   {stats['max']:>6.2f}%")
+
+
+
 
 
 if __name__ == "__main__":

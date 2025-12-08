@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Piedra, Papel o Tijera – Offline (2 jugadores)</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; --good:#10b981; --bad:#ef4444; --warn:#f59e0b; }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin:0; background:var(--bg); color:var(--text); display:flex; min-height:100vh; align-items:center; justify-content:center; }
+    .wrap { width:100%; max-width:980px; padding:24px; }
+    .card { background:var(--panel); border:1px solid #334155; border-radius:12px; padding:20px; }
+    h1 { margin:0 0 6px; font-size:28px; }
+    p { margin:8px 0; color:#94a3b8; }
+    .grid { display:grid; gap:16px; }
+    .grid-2 { grid-template-columns: 1fr 1fr; }
+    input, button, select { width:100%; padding:12px; border-radius:8px; border:1px solid #475569; background:#0b1220; color:var(--text); }
+    button { background:var(--accent); border:none; font-weight:700; cursor:pointer; }
+    button[disabled] { opacity:.5; cursor:not-allowed; }
+    .row { display:flex; gap:12px; align-items:center; }
+    .center { text-align:center; }
+    .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:#0b1220; border:1px solid #334155; color:#94a3b8; font-size:12px; }
+    .box { padding:16px; border-radius:12px; border:1px dashed #334155; }
+    .players { display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; gap:16px; }
+    .player { padding:16px; border-radius:12px; border:1px solid #334155; background:#0b1220; }
+    .vs { font-size:22px; color:#64748b; }
+    .kbind { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#020617; border:1px solid #334155; border-radius:6px; padding:2px 6px; color:#cbd5e1; }
+    .stats { display:flex; gap:12px; flex-wrap:wrap; }
+    .stat { background:#0b1220; border:1px solid #334155; border-radius:8px; padding:10px 12px; }
+    .timer { font-size:48px; font-weight:800; letter-spacing:1px; }
+    .success { color:var(--good); }
+    .danger  { color:var(--bad); }
+    .warn    { color:var(--warn); }
+    .footer { margin-top:10px; font-size:12px; color:#64748b; }
+
+    /* Popup centrado auto-cierre */
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:16px; }
+    .modal.show { display:flex; }
+    .modal .content { background:var(--panel); border:1px solid #334155; border-radius:12px; max-width:560px; width:100%; padding:20px; }
+    .choice { font-weight:700; }
+    .countdown { font-size:12px; color:#94a3b8; text-align:center; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- Pantalla 1: nombres -->
+    <div id="screen-setup" class="card">
+      <h1>♟️ Piedra, Papel o Tijera (offline)</h1>
+      <p>Introduce nombres y número de rondas objetivo. Jugador 1 usa <span class="kbind">A</span>/<span class="kbind">S</span>/<span class="kbind">D</span> (Piedra/Papel/Tijera) y Jugador 2 usa <span class="kbind">4</span>/<span class="kbind">5</span>/<span class="kbind">6</span>.</p>
+      <div class="grid grid-2" style="margin-top:12px;">
+        <div>
+          <label>Jugador 1</label>
+          <input id="p1name" type="text" placeholder="Nombre jugador 1" value="Rafa"/>
+        </div>
+        <div>
+          <label>Jugador 2</label>
+          <input id="p2name" type="text" placeholder="Nombre jugador 2" value="Víctor"/>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <div style="flex:1">
+          <label>Nº de rondas objetivo</label>
+          <input id="targetRounds" type="number" min="1" max="1000" value="100"/>
+        </div>
+        <div style="width:220px">
+          <label>Ventana de entrada (seg)</label>
+          <select id="windowSec">
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px;">
+        <button id="startBtn">¡Comenzar partida!</button>
+      </div>
+      <div class="footer">Al finalizar la recopilación puedes descargar un CSV con las rondas (solo campos básicos por jugador).</div>
+    </div>
+
+    <!-- Pantalla 2: juego -->
+    <div id="screen-game" class="card" style="display:none;">
+      <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+        <div class="pill" id="roundLabel">Ronda 1/100</div>
+        <div class="stats">
+          <div class="stat">🎖️ <span id="p1wins">0</span> – <span id="p2wins">0</span> 🎖️</div>
+          <div class="stat">🤝 Empates: <span id="draws">0</span></div>
+          <div class="stat">📦 Registros: <span id="rows">0</span></div>
+        </div>
+      </div>
+
+      <div class="box center">
+        <div>Cuenta atrás</div>
+        <div id="timer" class="timer">3</div>
+        <div class="footer">Las elecciones no se muestran hasta el final de la ronda.</div>
+      </div>
+
+      <div class="players" style="margin-top:16px;">
+        <div class="player">
+          <div><b id="p1label">Jugador 1</b></div>
+          <div style="margin-top:6px;">
+            Teclas:
+            <span class="kbind">A</span>=Piedra ·
+            <span class="kbind">S</span>=Papel ·
+            <span class="kbind">D</span>=Tijera
+          </div>
+          <div style="margin-top:8px;">Tu elección: <span id="p1choice" class="choice">—</span></div>
+        </div>
+        <div class="vs">VS</div>
+        <div class="player">
+          <div><b id="p2label">Jugador 2</b></div>
+          <div style="margin-top:6px;">Teclas: <span class="kbind">4</span>=Piedra · <span class="kbind">5</span>=Papel · <span class="kbind">6</span>=Tijera</div>
+          <div style="margin-top:8px;">Tu elección: <span id="p2choice" class="choice">—</span></div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:16px;">
+        <button id="finishBtn" style="background:#ef4444">Finalizar & Descargar CSV</button>
+        <button id="skipBtn" title="Descarta la ronda actual">Descartar ronda</button>
+      </div>
+    </div>
+
+    <!-- Popup auto-cierre -->
+    <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="content">
+        <h2 id="modalTitle" style="margin:0 0 8px;">Resultado de la ronda</h2>
+        <div class="players" style="margin-top:6px;">
+          <div class="player">
+            <div><b id="mP1">Jugador 1</b></div>
+            <div style="margin-top:6px;">Elección: <span id="mP1move" class="choice">—</span></div>
+            <div style="margin-top:6px; color:#94a3b8;">Tecla: <span id="mP1key" class="kbind">—</span></div>
+          </div>
+          <div class="vs">VS</div>
+          <div class="player">
+            <div><b id="mP2">Jugador 2</b></div>
+            <div style="margin-top:6px;">Elección: <span id="mP2move" class="choice">—</span></div>
+            <div style="margin-top:6px; color:#94a3b8;">Tecla: <span id="mP2key" class="kbind">—</span></div>
+          </div>
+        </div>
+        <div class="center" style="margin-top:12px;">
+          <div id="mResult" class="success" style="font-weight:800;">Ganador: —</div>
+          <div id="mReason" style="color:#94a3b8; margin-top:4px;">—</div>
+          <div class="countdown">Cerrando en <span id="autoCloseSec">3</span>… (pulsa <b>Espacio</b> o <b>Enter</b> para continuar ya)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pantalla fin -->
+    <div id="screen-end" class="card" style="display:none;">
+      <h1>✔️ Datos guardados</h1>
+      <p>Puedes volver a jugar o abrir el CSV en Excel / Pandas.</p>
+      <div class="row" style="margin-top:12px;">
+        <button id="playAgainBtn">Jugar de nuevo</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ===== Config =====
+    const RESULT_DELAY_MS = 3000; // 3s popup
+
+    // ===== Utilidades =====
+    const MOVES = { ROCK: 'Piedra', PAPER: 'Papel', SCISSORS: 'Tijera', NONE: 'Sin entrada' };
+    const MOVE_CODE = { 'Piedra': 0, 'Papel': 1, 'Tijera': 2, 'Sin entrada': '' };
+    // J1 = A/S/D
+    const P1_KEYS = { a:'A', s:'S', d:'D' };
+    // J2 = 4/5/6 + numpad
+    const P2_KEYS = { '4':'4', '5':'5', '6':'6', Numpad4:'Numpad4', Numpad5:'Numpad5', Numpad6:'Numpad6' };
+
+    function keyToMove_P1(k) {
+      const kl = (k || '').toLowerCase();
+      if (kl === 'a') return MOVES.ROCK;
+      if (kl === 's') return MOVES.PAPER;
+      if (kl === 'd') return MOVES.SCISSORS;
+      return null;
+    }
+    function keyToMove_P2(e) {
+      const key = e.key;
+      const code = e.code;
+      if (key === '4' || code === 'Numpad4') return MOVES.ROCK;
+      if (key === '5' || code === 'Numpad5') return MOVES.PAPER;
+      if (key === '6' || code === 'Numpad6') return MOVES.SCISSORS;
+      return null;
+    }
+    function winner(m1, m2) {
+      const beats = {
+        [MOVES.ROCK]:     MOVES.SCISSORS,
+        [MOVES.PAPER]:    MOVES.ROCK,
+        [MOVES.SCISSORS]: MOVES.PAPER
+      };
+      if (m1 === MOVES.NONE && m2 === MOVES.NONE) return { who:'Inválida', reason:'Nadie pulsó' };
+      if (m1 === MOVES.NONE) return { who:'Inválida', reason:'Jugador 1 no pulsó' };
+      if (m2 === MOVES.NONE) return { who:'Inválida', reason:'Jugador 2 no pulsó' };
+      if (m1 === m2) return { who:'Empate', reason:'Mismo movimiento' };
+      if (beats[m1] === m2) return { who:'Jugador 1', reason:`${m1} vence a ${m2}` };
+      else return { who:'Jugador 2', reason:`${m2} vence a ${m1}` };
+    }
+    function download(filename, text) {
+      const blob = new Blob([text], {type: 'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+    function moveToCode(mv) {
+      return MOVE_CODE[mv] ?? '';
+    }
+
+    // ===== Estado =====
+    let state = {
+      p1:'Jugador 1', p2:'Jugador 2', targetRounds:100, windowSec:3,
+      round:0,
+      rows:[],           // filas que guardaremos en CSV (rondas válidas)
+      stats:{p1:0,p2:0,draw:0},
+      inWindow:false,
+      timerId:null, timeLeft:3,
+      p1_choice: MOVES.NONE, p1_key:'',
+      p2_choice: MOVES.NONE, p2_key:'',
+      // mantenemos lo mínimo para el juego
+      lastRoundValid:false,
+      autoCloseId:null, autoCloseTickId:null,
+    };
+
+    // ===== Elementos =====
+    const el = s => document.querySelector(s);
+    const $setup = el('#screen-setup'), $game = el('#screen-game'), $end = el('#screen-end'), $modal = el('#modal');
+
+    const p1name = el('#p1name'), p2name = el('#p2name'), targetRounds = el('#targetRounds'), windowSec = el('#windowSec'), startBtn = el('#startBtn');
+
+    const roundLabel = el('#roundLabel'), timer = el('#timer');
+    const p1wins = el('#p1wins'), p2wins = el('#p2wins'), draws = el('#draws'), rowsCt = el('#rows');
+    const p1label = el('#p1label'), p2label = el('#p2label');
+    const p1choice = el('#p1choice'), p2choice = el('#p2choice');
+
+    const finishBtn = el('#finishBtn'), skipBtn = el('#skipBtn');
+
+    const mP1 = el('#mP1'), mP2 = el('#mP2');
+    const mP1move = el('#mP1move'), mP2move = el('#mP2move');
+    const mP1key = el('#mP1key'),  mP2key = el('#mP2key');
+    const mResult = el('#mResult'), mReason = el('#mReason');
+    const modalTitle = el('#modalTitle'), autoCloseSec = el('#autoCloseSec');
+
+    const playAgainBtn = el('#playAgainBtn');
+
+    // ===== Flujo =====
+    startBtn.addEventListener('click', () => {
+      const n1 = p1name.value.trim() || 'Jugador 1';
+      const n2 = p2name.value.trim() || 'Jugador 2';
+      const tR = Math.max(1, Math.min(1000, parseInt(targetRounds.value || '100',10)));
+      const wS = Math.max(1, Math.min(10, parseInt(windowSec.value || '3',10)));
+
+      state = {...state,
+        p1:n1, p2:n2, targetRounds:tR, windowSec:wS,
+        round:0, rows:[], stats:{p1:0,p2:0,draw:0}
+      };
+      p1label.textContent = n1; p2label.textContent = n2;
+      updateHud();
+      show($game); hide($setup); hide($end);
+      setTimeout(startRound, 200);
+    });
+
+    function startRound() {
+      clearInterval(state.timerId);
+
+      state.p1_choice = MOVES.NONE; state.p1_key='';
+      state.p2_choice = MOVES.NONE; state.p2_key='';
+      p1choice.textContent = '—'; p2choice.textContent = '—';
+
+      state.timeLeft = state.windowSec; timer.textContent = state.timeLeft;
+      state.inWindow = true; updateHud();
+
+      state.timerId = setInterval(() => {
+        state.timeLeft -= 1;
+        timer.textContent = Math.max(0, state.timeLeft);
+        if (state.timeLeft <= 0) endWindow();
+      }, 1000);
+    }
+
+    function endWindow() {
+      state.inWindow = false;
+      clearInterval(state.timerId);
+
+      const res = winner(state.p1_choice, state.p2_choice);
+      const valid = res.who !== 'Inválida';
+      state.lastRoundValid = valid;
+
+      // popup: mostramos texto legible
+      mP1.textContent = state.p1; mP2.textContent = state.p2;
+      mP1move.textContent = state.p1_choice; mP2move.textContent = state.p2_choice;
+      mP1key.textContent = state.p1_key || '—'; mP2key.textContent = state.p2_key || '—';
+
+      if (valid) {
+        if (res.who === 'Jugador 1') { state.stats.p1 += 1; }
+        else if (res.who === 'Jugador 2') { state.stats.p2 += 1; }
+        else { state.stats.draw += 1; }
+
+        // Guardamos solo lo básico en CSV: timestamp, round, nombres, tecla y código de movimiento por jugador, ganador
+        state.rows.push({
+          ts: new Date().toISOString(),
+          round: state.round + 1,
+          p1_name: state.p1,
+          p2_name: state.p2,
+          p1_key: state.p1_key || '',
+          p1_move_code: moveToCode(state.p1_choice),
+          p2_key: state.p2_key || '',
+          p2_move_code: moveToCode(state.p2_choice),
+          winner: (res.who === 'Empate') ? 'DRAW' : (res.who === 'Jugador 1' ? 'P1' : 'P2'),
+          reason: res.reason
+        });
+
+        // avanzar contador de rondas válidas solo cuando guardamos una válida
+        state.round += 1;
+
+        modalTitle.textContent = 'Resultado de la ronda';
+        mResult.textContent = (res.who === 'Empate') ? 'Empate' : `Ganador: ${res.who}`;
+        mResult.className = (res.who === 'Empate') ? 'warn' : (res.who === 'Jugador 1' ? 'success' : 'danger');
+        mReason.textContent = res.reason;
+      } else {
+        modalTitle.textContent = 'Ronda inválida (se repetirá)';
+        mResult.textContent = 'No se registró la ronda';
+        mResult.className = 'warn';
+        mReason.textContent = res.reason;
+      }
+
+      updateHud();
+      openModalAutoAdvance();
+    }
+
+    function openModalAutoAdvance() {
+      show($modal);
+      let ms = RESULT_DELAY_MS;
+      autoCloseSec.textContent = Math.ceil(ms/1000);
+      clearTimeout(state.autoCloseId);
+      clearInterval(state.autoCloseTickId);
+
+      state.autoCloseTickId = setInterval(() => {
+        ms -= 100;
+        if (ms <= 0) return;
+        autoCloseSec.textContent = Math.ceil(ms/1000);
+      }, 100);
+
+      const proceed = () => {
+        hide($modal);
+        clearTimeout(state.autoCloseId);
+        clearInterval(state.autoCloseTickId);
+        if (state.lastRoundValid && state.round >= state.targetRounds) finalizeAndDownload();
+        else startRound();
+      };
+
+      state.autoCloseId = setTimeout(proceed, RESULT_DELAY_MS);
+
+      const skipHandler = (e) => {
+        if (e.code === 'Space' || e.code === 'Enter') {
+          window.removeEventListener('keydown', skipHandler, true);
+          proceed();
+        }
+      };
+      window.addEventListener('keydown', skipHandler, true);
+    }
+
+    skipBtn.addEventListener('click', () => {
+      if (!state.inWindow) return;
+      state.inWindow = false;
+      clearInterval(state.timerId);
+      state.p1_choice = MOVES.NONE; state.p2_choice = MOVES.NONE;
+      state.p1_key=''; state.p2_key='';
+      modalTitle.textContent = 'Ronda descartada';
+      mP1move.textContent = '—'; mP2move.textContent = '—';
+      mP1key.textContent = '—';  mP2key.textContent = '—';
+      mResult.textContent = 'No se registró la ronda';
+      mResult.className = 'warn';
+      mReason.textContent = 'Descartada manualmente';
+      state.lastRoundValid = false;
+      updateHud();
+      openModalAutoAdvance();
+    });
+
+    finishBtn.addEventListener('click', () => {
+      if (state.inWindow) { state.inWindow = false; clearInterval(state.timerId); }
+      finalizeAndDownload();
+    });
+
+    function finalizeAndDownload() {
+      const csv = toCSV_basic(state.rows);
+      const fname = `rps_basic_${state.p1}_${state.p2}_${new Date().toISOString().replaceAll(':','-')}.csv`;
+      download(fname, csv);
+      hide($game); show($end);
+    }
+
+    playAgainBtn.addEventListener('click', () => { hide($end); show($setup); });
+
+    // ===== Captura de teclado =====
+    window.addEventListener('keydown', (e) => {
+      if (!state.inWindow) return;
+      if (['INPUT','SELECT','TEXTAREA','BUTTON'].includes(document.activeElement?.tagName)) document.activeElement.blur();
+
+      // Jugador 1
+      const p1move = keyToMove_P1(e.key);
+      if (p1move && state.p1_choice === MOVES.NONE) {
+        state.p1_choice = p1move;
+        state.p1_key = (P1_KEYS[e.key.toLowerCase()] || e.key);
+      }
+
+      // Jugador 2
+      const p2move = keyToMove_P2(e);
+      if (p2move && state.p2_choice === MOVES.NONE) {
+        state.p2_choice = p2move;
+        state.p2_key = (P2_KEYS[e.code] || P2_KEYS[e.key] || e.key);
+      }
+    });
+
+    // ===== CSV simplificado (solo lo básico por ronda) =====
+    function toCSV_basic(rows) {
+      // cabecera explicativa simple + columnas
+      const meta = [
+        '# dataset: rps manual (2 jugadores, en persona)',
+        '# mapping: piedra=0, papel=1, tijera=2',
+        '# format: csv (cada fila = 1 ronda válida)',
+        '# columns: timestamp_iso,round,p1_name,p2_name,p1_key,p1_move_code,p2_key,p2_move_code,winner,reason'
+      ].join('\r\n');
+
+      const headers = ['timestamp_iso','round','p1_name','p2_name','p1_key','p1_move_code','p2_key','p2_move_code','winner','reason'].join(',');
+      const esc = v => `"${String(v ?? '').replaceAll('"','""')}"`;
+      const lines = [meta, headers];
+      for (const r of rows) {
+        lines.push([
+          r.ts, r.round, r.p1_name, r.p2_name,
+          r.p1_key, r.p1_move_code, r.p2_key, r.p2_move_code,
+          r.winner, r.reason
+        ].map(esc).join(','));
+      }
+      return lines.join('\r\n');
+    }
+
+    // ===== UI helpers =====
+    function updateHud() {
+      roundLabel.textContent = `Ronda ${state.round + 1}/${state.targetRounds}`;
+      p1wins.textContent = state.stats.p1;
+      p2wins.textContent = state.stats.p2;
+      draws.textContent  = state.stats.draw;
+      rowsCt.textContent = state.rows.length;
+    }
+    function show(n){ n.style.display='block'; }
+    function hide(n){ n.style.display='none'; }
+
+    // init: show setup
+    show($setup);
+  </script>
+</body>
+</html>
